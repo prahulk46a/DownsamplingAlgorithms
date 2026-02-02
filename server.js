@@ -1,6 +1,12 @@
 const express = require("express");
 const cors = require("cors");
 const mysql = require("mysql2/promise");
+const { downsampleMinMax } = require("./sampling_algo/BasicDownsampling.js");
+const { lttb } = require("./sampling_algo/LTTB.js");
+const { decimate } = require("./sampling_algo/Decimation.js");
+const { swingingDoor } = require("./sampling_algo/SwingingDoor.js");
+const { generateBatch } = require("./utils/helpers.js");
+const { generateSingleReading } = require("./utils/helpers.js");
 const app = express();
 const PORT = 3000;
 
@@ -38,41 +44,6 @@ const pool = mysql.createPool({
   }
 })();
 
-/* ------------------ DATA GENERATION ------------------ */
-let lastSensorValue = 25000;
-// Generate a single sensor reading with continuity
-function generateSingleReading() {
-  lastSensorValue += (Math.random() - 0.5) * 25;
-  return {
-    ts: Date.now(),
-    value: Number(lastSensorValue.toFixed(2))
-  };
-}
-
-/* ------------------ DOWNSAMPLING ------------------ */
-function downsampleMinMax(data, maxPoints) {
-  if (data.length <= maxPoints) return data;
-
-  const bucketSize = Math.ceil(data.length / maxPoints);
-  const sampled = [];
-
-  for (let i = 0; i < data.length; i += bucketSize) {
-    const bucket = data.slice(i, i + bucketSize);
-    if (!bucket.length) continue;
-
-    let min = bucket[0];
-    let max = bucket[0];
-
-    for (const p of bucket) {
-      if (p.value < min.value) min = p;
-      if (p.value > max.value) max = p;
-    }
-    min.ts < max.ts ? sampled.push(min, max) : sampled.push(max, min);
-  }
-
-  return sampled;
-}
-
 /* ------------------ RANGE CONFIG ------------------ */
 function getConfig(range) {
   const now = Date.now();
@@ -101,40 +72,42 @@ function getConfig(range) {
   }
 }
 
-/* ------------------ API ------------------ */
-// Get sensor data for a range
-app.get("/api/chart", async (req, res) => {
+
+app.get("/api/chart", (req, res) => {
   const range = req.query.range || "1d";
-  const { start, step, maxPoints } = getConfig(range);
-  const now = Date.now();
 
-  try {
-    const connection = await pool.getConnection();
-    const [rows] = await connection.query(
-      "SELECT ts, value FROM sensor_readings WHERE ts >= ? AND ts <= ? ORDER BY ts ASC",
-      [start, now]
-    );
-    connection.release();
-    
-    // If no data in database, generate sample data
-    let raw = rows && rows.length > 0 ? rows : generateData(start, now, step);
-    const points = downsampleMinMax(raw, maxPoints);
-    console.log('Downsampled points=>', points.length);
-    console.log('Original points=>', raw.length);
-    res.json({ range, points });
-  } catch (err) {
-    console.error("Query error:", err);
-    res.status(500).json({ error: "Failed to fetch data" });
+  let rawData;
+  let processedData;
+
+  if (range === "1h") {
+    rawData = generateBatch(3600);             // 1 hour
+    processedData = decimate(rawData, 5);      // fast live view
   }
+
+  else if (range === "1d") {
+    rawData = generateBatch(86400);            // 1 day
+    processedData = swingingDoor(rawData, 5);  // accurate
+  }
+
+  else if (range === "1w") {
+    rawData = generateBatch(604800);            // 1 week
+    processedData = lttb(rawData, 300);         // UI-friendly
+  }
+
+  else {
+    return res.status(400).json({ error: "Invalid range" });
+  }
+
+  res.json({
+    range,
+    points: processedData
+  });
 });
-
-
 
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`)
 );
 
-/* ------------------ AUTO INSERT TASK ------------------ */
 setInterval(async () => {
   try {
     const reading = generateSingleReading();
@@ -150,7 +123,7 @@ setInterval(async () => {
   }
 }, 1000); // 1 seconds
 
-// Graceful shutdown
+
 process.on("SIGINT", async () => {
   await pool.end();
   console.log("MySQL connection pool closed");

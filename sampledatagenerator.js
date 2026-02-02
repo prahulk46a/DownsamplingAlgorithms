@@ -1,16 +1,3 @@
-function generateData(start, end, stepMs) {
-  let value = 25000;
-  const data = [];
-
-  for (let t = start; t <= end; t += stepMs) {
-    value += (Math.random() - 0.5) * 25; 
-    data.push({
-      ts: t,
-      value: Number(value.toFixed(2))
-    });
-  }
-  return data;
-}
 // Insert new sensor reading
 app.post("/api/reading", async (req, res) => {
   const { ts, value } = req.body;
@@ -67,3 +54,18 @@ app.get("/api/stats", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch stats" });
   }
 });
+
+// function generateData(start, end, stepMs) {
+//   let value = 25000;
+//   const data = [];
+
+//   for (let t = start; t <= end; t += stepMs) {
+//     value += (Math.random() - 0.5) * 25; 
+//     data.push({
+//       ts: t,
+//       value: Number(value.toFixed(2))
+//     });
+//   }
+//   return data;
+// }
+// module.exports = { generateData };
